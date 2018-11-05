@@ -1,54 +1,72 @@
+from datetime import date, timedelta, datetime
 import pandas as pd
-import datetime as dt
+import numpy as np
 import openpyxl as xl
 import sys
 import os
 from openpyxl.styles import PatternFill, Alignment, Font
 
+DF_ANAME = 'Associate Name'
+DF_DATE  = 'Date'
+DF_HOURS = 'Hours'
+DF_COST  = 'Cost'
+DF_RATE  = 'Rate'
+WS_THOURS = 'Total Hours'
+WS_TCOST  = 'Total Cost'
+
+FORECAST_COLOR="CCFFCC"
+TODAY_COLOR="00B050"
+ZERO_COST_COLOR="FCD5B4"
+DATES_COLOR="DCE6F1"
 
 '''
 Returns the Sunday before <date> if <date> is not already Sunday
 '''
-def getSunday(date):
-    ndate = date
-    if type(date) is str :
-        if len(date) == 10:
-            ndate = dt.datetime(int(date[-4:]), int(date[0:2]), int(date[-7:-5]))
+def getSunday(pdate):
+    ndate = pdate
+    if type(pdate) is str :
+        if len(pdate) == 10:
+            ndate = datetime(int(pdate[-4:]), int(pdate[0:2]), int(pdate[-7:-5]))
         else:
             ndate = None
-    elif type(ndate) is dt.date:
-        ndate = ndate.datetime()
+    elif type(ndate) is date:
+        ndate = datetime(ndate.year, ndate.month, ndate.day)
     dow = ndate.weekday()
     if dow < 6:
-        ndate = ndate - dt.timedelta(dow+1)
+        ndate = ndate - timedelta(dow+1)
     return ndate
 
 
+''' 
+Build headers for the worksheet. Has a row for resource name, if it contains actuals a column
+with resource rate, one column for each week from the first week in project up to the last week in
+the forecast. There are two columns after weeks one to sum hours and one to sum cost
+'''
 def create_headers(ws, title, dcmap, is_actual, max_name_len):
     ws.title = title
     ws.insert_rows(1, 2)
     curr_col = 1
-    f = PatternFill(patternType=None, start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
+    f = PatternFill(patternType=None, start_color=DATES_COLOR, end_color=DATES_COLOR, fill_type="solid")
     font = Font(bold=True)
     ws.cell(1,curr_col,'Row Labels')
     if is_actual:
         curr_col += 1
-        ws.cell(1, curr_col, 'Rate')
+        ws.cell(1, curr_col, DF_RATE)
     curr_col += 1
     r = Alignment(text_rotation=90, horizontal='center')
     for curr_date in dcmap.keys():
-        c = ws.cell(1,curr_col,curr_date)
+        c = ws.cell(1,curr_col,curr_date.date())
         c.fill = f
         c.alignment = r
         c.font = font
         curr_col += 1
-    c = ws.cell(1, curr_col, "Total Hours")
+    c = ws.cell(1, curr_col, WS_THOURS)
     c.fill = f
     r = Alignment(wrap_text=True, horizontal='center')
     c.alignment = r
     c.font = font
     if is_actual:
-        c = ws.cell(1, curr_col+1, "Total Cost")
+        c = ws.cell(1, curr_col+1, WS_TCOST)
         c.fill = f
         c.alignment = r
         c.font = font
@@ -61,16 +79,15 @@ def create_headers(ws, title, dcmap, is_actual, max_name_len):
 def actuals_sheet(ws, actuals, date_col):
     row = 1
     start_col = 3
-    actuals_gb = actuals.groupby(by=['Associate Name', 'Rate', 'Entry Date']).sum()
+    actuals_gb = actuals.groupby(by=[DF_ANAME, DF_RATE, DF_DATE]).sum()
     name = None
     rate = -1.0
     for index, group in actuals_gb.iterrows():
-        #print('{0} {1} {2} {3} {4}'.format(index[0], index[1],index[2], group['Total Hours'], group['Billable Amt. In USD']))
         if name != index[0] or rate != index[1]:
             row += 1
             ws.cell(row, 1, index[0])  # name
             ws.cell(row, 2, index[1]) #rate
-        ws.cell(row,start_col + date_col[index[2].date()], group['Total Hours'])
+        ws.cell(row,start_col + date_col[index[2]], group[DF_HOURS])
         name = index[0]
         rate = index[1]
 
@@ -78,31 +95,72 @@ def actuals_sheet(ws, actuals, date_col):
 def forecast_sheet(ws, fcst, date_col):
     row = 1
     start_col = 2
-    fcst_gb = fcst.groupby(by=['User Last Name', 'User First Name', 'Date']).sum()
+    fcst_gb = fcst.groupby(by=[DF_ANAME, DF_DATE]).sum()
     curr_name = ''
     for index, group in fcst_gb.iterrows():
-        name = '{0}, {1}'.format(index[0],index[1])
+        name = index[0]
         if name != curr_name:
             row += 1
             ws.cell(row, 1, name)  # name
-        ws.cell(row,start_col + date_col[index[2].date()], group['Total Booking Hours'])
+        ws.cell(row,start_col + date_col[index[1]], group[DF_HOURS])
         curr_name = name
+
+def fcst_act_sheet(ws, fcst, actuals, date_col):
+    fcst_date = getSunday(date.today())
+    row = 1
+    start_col = 3
+    actuals_gb = actuals.groupby(by=[DF_ANAME, DF_RATE, DF_DATE]).sum()
+    name = None
+    rate = -1.0
+    for index, group in actuals_gb.iterrows():
+        if name != index[0] or rate != index[1]:
+            row += 1
+            if name != index[0]:
+                if name is not None:
+                    c = ws.cell(row, 1, name)
+                    setColorToFcst(ws,row)
+                    res_fcst = fcst.loc[(fcst[DF_ANAME] == name) & (fcst[DF_DATE] >= fcst_date)]
+                    res_fcst_gb = res_fcst.groupby(by=[DF_ANAME, DF_DATE]).sum()
+                    for index_fcst, group_fcst in res_fcst_gb.iterrows():
+                        ws.cell(row, start_col + date_col[index_fcst[1]], group_fcst[DF_HOURS])
+                    row += 1
+                name = index[0]
+            rate = index[1]
+            ws.cell(row, 1, name)
+            ws.cell(row, 2, rate)
+        ws.cell(row,start_col + date_col[index[2]], group[DF_HOURS])
+    setTodayColor(ws,date_col[fcst_date]+3)
 
 
 def create_date_seq(start, end):
     seq = dict()
     shift = 0
-    for date in pd.date_range(start=start, end=end, freq='W'):
-        seq[date.date()] = shift
+    for date in pd.date_range(start=start, end=end, freq='W').to_pydatetime():
+        seq[date] = shift
         shift += 1
     return seq
 
 
-def setColorToZeros(ws, pf):
+def setTodayColor(ws, col):
+    f = PatternFill(patternType=None, start_color=TODAY_COLOR, end_color=TODAY_COLOR, fill_type="solid")
+    for row in ws.iter_rows(min_row=2, min_col=col, max_col=col):
+        for col in row:
+            col.fill = f
+
+
+def setColorToFcst(ws, row):
+    f = PatternFill(patternType=None, start_color=FORECAST_COLOR, end_color=FORECAST_COLOR, fill_type="solid")
+    for cols in ws.iter_cols(min_row=row, max_row=row,  min_col=1):
+        for col in cols:
+            col.fill = f
+
+
+def setColorToZeros(ws):
+    f = PatternFill(patternType=None, start_color="FCD5B4", end_color="FCD5B4",fill_type="solid")
     for row in ws.iter_rows(min_row=2, min_col=2):
         if row[0].value == 0.0:
             for col in row:
-                col.fill = pf
+                col.fill = f
 
 
 def addFormulas(ws, shift, is_actual):
@@ -153,9 +211,13 @@ if __name__ == '__main__':
                 First row with data is 9.
                 '''
                 fcst = pd.read_excel(fcstxl,header=6, converters={4: getSunday})
-                fcst.drop(['Role', 'Project', 'Actual Hours'], 1)
-                from_date = fcst['Date'].min().date()
-                to_date = fcst['Date'].max().date()
+                fcst[DF_ANAME] = fcst['User Last Name']+ ", "+ fcst['User First Name']
+                fcst[DF_RATE] = np.NaN
+                fcst.drop(['Role', 'Project', 'Actual Hours','User Last Name', 'User First Name'], 1)
+                fcst = fcst.rename(index=str,columns={"Total Booking Hours":DF_HOURS})
+
+                from_date = fcst[DF_DATE].min().date()
+                to_date = fcst[DF_DATE].max().date()
 
                 '''
                 This function will process a spreadsheet where columns are:
@@ -201,29 +263,36 @@ if __name__ == '__main__':
                               'Timesheet is Submitted', 'Timesheet is Approved', 'Timesheet Workflow State',
                               'JTRAX Invoiced Status/Ref #', 'Invoice Through Date', 'Service Delivery Location',
                               'Entry Note', 'On Hold for Billing', 'On Hold Reason'], 1)
-                dt = actuals['Entry Date'].min().date()
+                #actuals.columns = [DF_ANAME, DF_DATE, DF_HOURS, DF_COST]
+                actuals = actuals.rename(index=str,columns={"Entry Date":DF_DATE, "Total Hours":DF_HOURS, "Billable Amt. In USD":DF_COST})
+                dt = actuals[DF_DATE].min().date()
                 if dt < from_date:
                     from_date = dt
-                dt = actuals['Entry Date'].max().date()
+                dt = actuals[DF_DATE].max().date()
                 if dt > to_date:
                     to_date = dt
-                max_name_len = actuals['Associate Name'].map(len).max()
-                actuals['Rate'] = actuals['Billable Amt. In USD'] / actuals['Total Hours']
+                max_name_len = actuals[DF_ANAME].map(len).max()
+                actuals[DF_RATE] = actuals[DF_COST] / actuals[DF_HOURS]
 
                 wb = xl.Workbook()
                 dcmap = create_date_seq(from_date, to_date)
                 create_headers(wb.active, 'Actual', dcmap, True, max_name_len)
                 create_headers(wb.create_sheet(), 'Forecast', dcmap, False, max_name_len)
+                create_headers(wb.create_sheet(), 'Forecast+Actual', dcmap, True, max_name_len)
 
                 ws = wb['Actual']
                 actuals_sheet(ws, actuals, dcmap)
-                setColorToZeros(ws, PatternFill(patternType=None, start_color="FCD5B4", end_color="FCD5B4",
-                                                fill_type="solid"))
+                setColorToZeros(ws)
                 addFormulas(ws, max(dcmap.values()), True)
 
                 ws = wb['Forecast']
                 forecast_sheet(ws, fcst, dcmap)
                 addFormulas(ws, max(dcmap.values()), False)
+
+                ws = wb['Forecast+Actual']
+                fcst_act_sheet(ws, fcst,actuals, dcmap)
+                addFormulas(ws, max(dcmap.values()), True)
+                setColorToZeros(ws)
 
                 wb.save(out)
                 wb.close()
