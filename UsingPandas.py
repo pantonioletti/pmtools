@@ -11,22 +11,32 @@ DF_DATE  = 'Date'
 DF_HOURS = 'Hours'
 DF_COST  = 'Cost'
 DF_RATE  = 'Rate'
+DF_APPRV = 'Timesheet is Approved'
 WS_THOURS = 'Total Hours'
 WS_TCOST  = 'Total Cost'
 WSN_ACTUALS = 'Actuals'
 WSN_FCST = 'Forecast'
 WSN_ACTFCST = 'Actuals+Forecast'
+WSN_NOTAPPRV = 'Not Approved'
 
+ACTUALS2DROP= ['Client Reporting Unit', 'Client Name', 'Project Name', 'Client PO#', 'Project Manager',
+               'AssociateId', 'AssociateType', 'Period Start Date', 'Task Name', 'Billable Hours', 'Billing Rule Name',
+               'Billable Amt. In Project Currency', 'Project Currency Name', 'Timesheet is Submitted', 'Timesheet Workflow State',
+               'JTRAX Invoiced Status/Ref #', 'Invoice Through Date', 'Service Delivery Location', 'Entry Note',
+               'On Hold for Billing', 'On Hold Reason']
+FCST2DROP = ['Role', 'Project', 'Actual Hours','User Last Name', 'User First Name']
 
 FORECAST_COLOR="CCFFCC"
 TODAY_COLOR="00B050"
 ZERO_COST_COLOR="FCD5B4"
 DATES_COLOR="DCE6F1"
+UNAPPRV_COLOR = "FF3300"
 
 ZERO_FILLER = PatternFill(patternType=None, start_color=ZERO_COST_COLOR, end_color=ZERO_COST_COLOR,fill_type="solid")
 FCST_FILLER = PatternFill(patternType=None, start_color=FORECAST_COLOR, end_color=FORECAST_COLOR,fill_type="solid")
 TODAY_FILLER = PatternFill(patternType=None, start_color=TODAY_COLOR, end_color=TODAY_COLOR, fill_type="solid")
 DATES_FILLER = PatternFill(patternType=None, start_color=DATES_COLOR, end_color=DATES_COLOR, fill_type="solid")
+UNAPPRV_FILLER = PatternFill(patternType=None, start_color=UNAPPRV_COLOR, end_color=UNAPPRV_COLOR, fill_type="solid")
 
 
 '''
@@ -88,8 +98,11 @@ def create_headers(ws, title, dcmap, is_actual, max_name_len):
     ws.column_dimensions['A'].width = max_name_len
 
 
-
-def actuals_sheet(ws, actuals, date_col):
+"""
+Processing for actuals sheet loaded in actuals DataFrame dat will be grouped by Associate Name
+and rate. Rate 0 is set to a different color
+"""
+def actuals_sheet(ws, actuals, date_col, apprv):
     row = 1
     start_col = 3
     actuals_gb = actuals.groupby(by=[DF_ANAME, DF_RATE, DF_DATE]).sum()
@@ -102,11 +115,18 @@ def actuals_sheet(ws, actuals, date_col):
             ws.cell(row, 2, index[1]) #rate
             if index[1] == 0:
                 set_color(ws.iter_cols(min_row=row, max_row=row, min_col=2),ZERO_FILLER)
+        if apprv and group[DF_APPRV] < 0:
+            set_color(ws.iter_cols(min_row=row, max_row=row, min_col=2), UNAPPRV_FILLER)
         ws.cell(row,start_col + date_col[index[2]], group[DF_HOURS])
+        if apprv and group[DF_APPRV] < 0:
+            set_color(ws.iter_cols(min_row=row, max_row=row, min_col=2), UNAPPRV_FILLER)
         name = index[0]
         rate = index[1]
 
 
+"""
+Processings for forecast sheet loaded in fcst DataFrame
+"""
 def forecast_sheet(ws, fcst, date_col):
     row = 1
     start_col = 2
@@ -121,6 +141,11 @@ def forecast_sheet(ws, fcst, date_col):
         curr_name = name
 
 
+"""
+Combining Actuals and Forecast data in one sheet. Actuals data fills the sheet up to last week. Since
+last week to last week with forecast data will fill next weeks. Rate for forecast has to be set by 
+spradsheet user. Special colors ha been set for rate value 0 and for forecast rows.
+"""
 def fcst_act_sheet(ws, fcst, actuals, date_col):
     fcst_date = getSunday(date.today())
     row = 1
@@ -147,6 +172,8 @@ def fcst_act_sheet(ws, fcst, actuals, date_col):
             if rate == 0:
                 set_color(ws.iter_cols(min_row=row, max_row=row, min_col=2),ZERO_FILLER)
         ws.cell(row,start_col + date_col[index[2]], group[DF_HOURS])
+        if group[DF_APPRV] < 0:
+            set_color(ws.iter_cols(min_row=row, max_row=row, min_col=2), UNAPPRV_FILLER)
     res_fcst = fcst.loc[fcst[DF_DATE] >= fcst_date]
     res_fcst_gb=res_fcst[~res_fcst[DF_ANAME].isin(actuals[DF_ANAME])].groupby(by=[DF_ANAME, DF_DATE]).sum()
     name = None
@@ -251,7 +278,7 @@ if __name__ == '__main__':
                 #When there is no resource assign (ie: last name is NA) the Associate Name column is filled with the Role description
                 fcst[DF_ANAME].fillna(fcst['Role'], inplace=True)
                 #Housekeeping, all unnecessary columns are dropped
-                fcst.drop(['Role', 'Project', 'Actual Hours','User Last Name', 'User First Name'], 1)
+                fcst.drop(FCST2DROP, 1)
                 #Renaming column
                 fcst = fcst.rename(index=str,columns={"Total Booking Hours":DF_HOURS})
 
@@ -296,13 +323,8 @@ if __name__ == '__main__':
                 Weeks start on Sunday.
                 First row with data is 9. 
                 '''
-                actuals = pd.read_excel(actxl,header=7, converters={'Entry Date': getSunday})
-                actuals.drop(['Client Reporting Unit', 'Client Name', 'Project Name', 'Client PO#', 'Project Manager',
-                              'AssociateId', 'AssociateType', 'Period Start Date', 'Task Name', 'Billable Hours',
-                              'Billing Rule Name', 'Billable Amt. In Project Currency', 'Project Currency Name',
-                              'Timesheet is Submitted', 'Timesheet is Approved', 'Timesheet Workflow State',
-                              'JTRAX Invoiced Status/Ref #', 'Invoice Through Date', 'Service Delivery Location',
-                              'Entry Note', 'On Hold for Billing', 'On Hold Reason'], 1)
+                actuals = pd.read_excel(actxl,header=7, converters={'Entry Date': getSunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
+                actuals.drop(ACTUALS2DROP, 1)
                 actuals = actuals.rename(index=str,columns={"Entry Date":DF_DATE, "Total Hours":DF_HOURS, "Billable Amt. In USD":DF_COST})
                 dt = actuals[DF_DATE].min().date()
                 if dt < from_date:
@@ -321,18 +343,24 @@ if __name__ == '__main__':
                 create_headers(wb.create_sheet(), WSN_FCST, dcmap, False, max_name_len)
                 create_headers(wb.create_sheet(), WSN_ACTFCST, dcmap, True, max_name_len)
 
-                ws = wb[WSN_ACTUALS]
-                actuals_sheet(ws, actuals, dcmap)
-                addFormulas(ws, max(dcmap.values()), True)
 
-                ws = wb[WSN_FCST]
-                forecast_sheet(ws, fcst, dcmap)
-                addFormulas(ws, max(dcmap.values()), False)
+                actuals_sheet(wb[WSN_ACTUALS], actuals, dcmap, True)
+                addFormulas(wb[WSN_ACTUALS], max(dcmap.values()), True)
 
-                ws = wb[WSN_ACTFCST]
-                fcst_act_sheet(ws, fcst,actuals, dcmap)
-                addFormulas(ws, max(dcmap.values()), True)
+                forecast_sheet(wb[WSN_FCST], fcst, dcmap)
+                addFormulas(wb[WSN_FCST], max(dcmap.values()), False)
 
+                fcst_act_sheet(wb[WSN_ACTFCST], fcst,actuals, dcmap)
+                addFormulas(wb[WSN_ACTFCST], max(dcmap.values()), True)
+
+                df_napprv = actuals[actuals[DF_APPRV]<0]
+                if df_napprv.size > 0:
+                    from_date = df_napprv[DF_DATE].min().date()
+                    to_date = df_napprv[DF_DATE].max().date()
+                    dcmap = create_date_seq(from_date,to_date)
+                    create_headers(wb.create_sheet(), WSN_NOTAPPRV, dcmap, True, max_name_len)
+                    actuals_sheet(wb[WSN_NOTAPPRV],df_napprv,dcmap,False)
+                    addFormulas(wb[WSN_NOTAPPRV], max(dcmap.values()), True)
                 wb.save(out)
                 wb.close()
                 print('Done!')
