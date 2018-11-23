@@ -240,8 +240,119 @@ def addFormulas(ws, shift, is_actual):
         c.number_format = '#,##0.00'
 
 
-start = time.time()
+def process(fcst, actuals):
+    '''
+    This function will process a spreadsheet where columns are:
+    .__________________________________.
+    |   Column data      |Column index |
+    .__________________________________.
+    |User Last Name      |     0       |
+    |User First Name     |     1       |
+    |Role                |     2       |
+    |Project             |     3       |
+    |Date                |     4       |
+    |Actual Hours        |     5       |
+    |Total Booking Hours |     6       |
+    .__________________________________.
+
+    Relevant data to be kept is consultant name (columns 0 and 1), date (columns 4) and booking hours (column 6).
+    Data is consolidated by week. Weeks start on Sunday.
+    First row with data is 9.
+    '''
+    #fcst = pd.read_excel(fcstxl, header=6, converters={4: getSunday})
+    # A new column is created as the concatenation of last and first names
+    fcst[DF_ANAME] = fcst['User Last Name'] + ", " + fcst['User First Name']
+    # When there is no resource assign (ie: last name is NA) the Associate Name column is filled with the Role description
+    fcst[DF_ANAME].fillna(fcst['Role'], inplace=True)
+    # Housekeeping, all unnecessary columns are dropped
+    fcst.drop(FCST2DROP, 1)
+    # Renaming column
+    fcst = fcst.rename(index=str, columns={"Total Booking Hours": DF_HOURS})
+
+    from_date = fcst[DF_DATE].min().date()
+    to_date = fcst[DF_DATE].max().date()
+    max_name_len = fcst[DF_ANAME].map(len).max()
+
+    '''
+    This function will process a spreadsheet where columns are:
+    .__________________________________________________.
+    |         Column data               | Column index |
+    .__________________________________________________.
+    | Client Reporting Unit            	|      0       |
+    | Client Name	                    |      1       | 
+    | Project Name	                    |      2       |
+    | Client PO#	                    |      3       |
+    | Project Manager	                |      4       |
+    | Associate Name	                |      5       |
+    | AssociateId	                    |      6       |
+    | AssociateType	                    |      7       |
+    | Period Start Date	                |      8       |
+    | Entry Date	                    |      9       |
+    | Task Name	                        |     10       |
+    | Total Hours	                    |     11       |
+    | Billable Hours	                |     12       |
+    | Billing Rule Name	                |     13       |
+    | Billable Amt. In Project Currency	|     14       |
+    | Project Currency Name	            |     15       |
+    | Billable Amt. In USD	            |     16       |
+    | Timesheet is Submitted	        |     17       |
+    | Timesheet is Approved           	|     18       |
+    | Timesheet Workflow State	        |     19       |
+    | JTRAX Invoiced Status/Ref #	    |     20       |
+    | Invoice Through Date	            |     21       |
+    | Service Delivery Location	        |     22       |
+    | Entry Note	                    |     23       |
+    | On Hold for Billing	            |     24       |
+    | On Hold Reason                    |     25       |
+    .__________________________________________________.
+    Relevant data to be kept is associate name (column 5), entry date (column 9),  hours (column 11), amount in USD (column 16).
+    Amount by itself is not kept, it is used to calculate rate (rate= <amount> / <hours>). Hours are consolidated by week/rate.
+    Weeks start on Sunday.
+    First row with data is 9. 
+    '''
+    #actuals = pd.read_excel(actxl, header=7, converters={'Entry Date': getSunday,
+    #                                                     'Timesheet is Approved': lambda x: 0 if x == 'Y' else -1})
+    actuals.drop(ACTUALS2DROP, 1)
+    actuals = actuals.rename(index=str,
+                             columns={"Entry Date": DF_DATE, "Total Hours": DF_HOURS, "Billable Amt. In USD": DF_COST})
+    dt = actuals[DF_DATE].min().date()
+    if dt < from_date:
+        from_date = dt
+    dt = actuals[DF_DATE].max().date()
+    if dt > to_date:
+        to_date = dt
+    tmp_len = actuals[DF_ANAME].map(len).max()
+    if tmp_len > max_name_len:
+        max_name_len = tmp_len
+    actuals[DF_RATE] = actuals[DF_COST] / actuals[DF_HOURS]
+
+    wb = xl.Workbook()
+    dcmap = create_date_seq(from_date, to_date)
+    create_headers(wb.active, WSN_ACTUALS, dcmap, True, max_name_len)
+    create_headers(wb.create_sheet(), WSN_FCST, dcmap, False, max_name_len)
+    create_headers(wb.create_sheet(), WSN_ACTFCST, dcmap, True, max_name_len)
+
+    actuals_sheet(wb[WSN_ACTUALS], actuals, dcmap, True)
+    addFormulas(wb[WSN_ACTUALS], max(dcmap.values()), True)
+
+    forecast_sheet(wb[WSN_FCST], fcst, dcmap)
+    addFormulas(wb[WSN_FCST], max(dcmap.values()), False)
+
+    fcst_act_sheet(wb[WSN_ACTFCST], fcst, actuals, dcmap)
+    addFormulas(wb[WSN_ACTFCST], max(dcmap.values()), True)
+
+    df_napprv = actuals[actuals[DF_APPRV] < 0]
+    if df_napprv.size > 0:
+        from_date = df_napprv[DF_DATE].min().date()
+        to_date = df_napprv[DF_DATE].max().date()
+        dcmap = create_date_seq(from_date, to_date)
+        create_headers(wb.create_sheet(), WSN_NOTAPPRV, dcmap, True, max_name_len)
+        actuals_sheet(wb[WSN_NOTAPPRV], df_napprv, dcmap, False)
+        addFormulas(wb[WSN_NOTAPPRV], max(dcmap.values()), True)
+    return wb
+
 if __name__ == '__main__':
+    start = time.time()
     if len(sys.argv) >= 3:
         fcstxl = sys.argv[1]
         actxl = sys.argv[2]
@@ -253,118 +364,12 @@ if __name__ == '__main__':
             try:
                 os.stat(fcstxl)
                 os.stat(actxl)
-
-                '''
-                This function will process a spreadsheet where columns are:
-                .__________________________________.
-                |   Column data      |Column index |
-                .__________________________________.
-                |User Last Name      |     0       |
-                |User First Name     |     1       |
-                |Role                |     2       |
-                |Project             |     3       |
-                |Date                |     4       |
-                |Actual Hours        |     5       |
-                |Total Booking Hours |     6       |
-                .__________________________________.
-
-                Relevant data to be kept is consultant name (columns 0 and 1), date (columns 4) and booking hours (column 6).
-                Data is consolidated by week. Weeks start on Sunday.
-                First row with data is 9.
-                '''
-                fcst = pd.read_excel(fcstxl,header=6, converters={4: getSunday})
-                #A new column is created as the concatenation of last and first names
-                fcst[DF_ANAME] = fcst['User Last Name']+ ", "+ fcst['User First Name']
-                #When there is no resource assign (ie: last name is NA) the Associate Name column is filled with the Role description
-                fcst[DF_ANAME].fillna(fcst['Role'], inplace=True)
-                #Housekeeping, all unnecessary columns are dropped
-                fcst.drop(FCST2DROP, 1)
-                #Renaming column
-                fcst = fcst.rename(index=str,columns={"Total Booking Hours":DF_HOURS})
-
-                from_date = fcst[DF_DATE].min().date()
-                to_date = fcst[DF_DATE].max().date()
-                max_name_len = fcst[DF_ANAME].map(len).max()
-
-                '''
-                This function will process a spreadsheet where columns are:
-                .__________________________________________________.
-                |         Column data               | Column index |
-                .__________________________________________________.
-                | Client Reporting Unit            	|      0       |
-                | Client Name	                    |      1       | 
-                | Project Name	                    |      2       |
-                | Client PO#	                    |      3       |
-                | Project Manager	                |      4       |
-                | Associate Name	                |      5       |
-                | AssociateId	                    |      6       |
-                | AssociateType	                    |      7       |
-                | Period Start Date	                |      8       |
-                | Entry Date	                    |      9       |
-                | Task Name	                        |     10       |
-                | Total Hours	                    |     11       |
-                | Billable Hours	                |     12       |
-                | Billing Rule Name	                |     13       |
-                | Billable Amt. In Project Currency	|     14       |
-                | Project Currency Name	            |     15       |
-                | Billable Amt. In USD	            |     16       |
-                | Timesheet is Submitted	        |     17       |
-                | Timesheet is Approved           	|     18       |
-                | Timesheet Workflow State	        |     19       |
-                | JTRAX Invoiced Status/Ref #	    |     20       |
-                | Invoice Through Date	            |     21       |
-                | Service Delivery Location	        |     22       |
-                | Entry Note	                    |     23       |
-                | On Hold for Billing	            |     24       |
-                | On Hold Reason                    |     25       |
-                .__________________________________________________.
-                Relevant data to be kept is associate name (column 5), entry date (column 9),  hours (column 11), amount in USD (column 16).
-                Amount by itself is not kept, it is used to calculate rate (rate= <amount> / <hours>). Hours are consolidated by week/rate.
-                Weeks start on Sunday.
-                First row with data is 9. 
-                '''
+                fcst = pd.read_excel(fcstxl, header=6, converters={4: getSunday})
                 actuals = pd.read_excel(actxl,header=7, converters={'Entry Date': getSunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
-                actuals.drop(ACTUALS2DROP, 1)
-                actuals = actuals.rename(index=str,columns={"Entry Date":DF_DATE, "Total Hours":DF_HOURS, "Billable Amt. In USD":DF_COST})
-                dt = actuals[DF_DATE].min().date()
-                if dt < from_date:
-                    from_date = dt
-                dt = actuals[DF_DATE].max().date()
-                if dt > to_date:
-                    to_date = dt
-                tmp_len = actuals[DF_ANAME].map(len).max()
-                if tmp_len > max_name_len:
-                    max_name_len = tmp_len
-                actuals[DF_RATE] = actuals[DF_COST] / actuals[DF_HOURS]
-
-                wb = xl.Workbook()
-                dcmap = create_date_seq(from_date, to_date)
-                create_headers(wb.active, WSN_ACTUALS, dcmap, True, max_name_len)
-                create_headers(wb.create_sheet(), WSN_FCST, dcmap, False, max_name_len)
-                create_headers(wb.create_sheet(), WSN_ACTFCST, dcmap, True, max_name_len)
-
-
-                actuals_sheet(wb[WSN_ACTUALS], actuals, dcmap, True)
-                addFormulas(wb[WSN_ACTUALS], max(dcmap.values()), True)
-
-                forecast_sheet(wb[WSN_FCST], fcst, dcmap)
-                addFormulas(wb[WSN_FCST], max(dcmap.values()), False)
-
-                fcst_act_sheet(wb[WSN_ACTFCST], fcst,actuals, dcmap)
-                addFormulas(wb[WSN_ACTFCST], max(dcmap.values()), True)
-
-                df_napprv = actuals[actuals[DF_APPRV]<0]
-                if df_napprv.size > 0:
-                    from_date = df_napprv[DF_DATE].min().date()
-                    to_date = df_napprv[DF_DATE].max().date()
-                    dcmap = create_date_seq(from_date,to_date)
-                    create_headers(wb.create_sheet(), WSN_NOTAPPRV, dcmap, True, max_name_len)
-                    actuals_sheet(wb[WSN_NOTAPPRV],df_napprv,dcmap,False)
-                    addFormulas(wb[WSN_NOTAPPRV], max(dcmap.values()), True)
+                wb = process(fcst,actuals)
                 wb.save(out)
                 wb.close()
                 print('Done!')
-
             except WindowsError:
                 print("Error: file does not exists")
         else:
