@@ -186,8 +186,9 @@ def fcst_act_sheet(ws, fcst, actuals, date_col):
 
         ws.cell(row, start_col + date_col[index_fcst[1]], group_fcst[DF_HOURS])
 
-    col = date_col[fcst_date]+2
-    set_color(ws.iter_cols(min_row=2, min_col=col, max_col=col),TODAY_FILLER)
+    if fcst_date in date_col:
+        col = date_col[fcst_date]+2
+        set_color(ws.iter_cols(min_row=2, min_col=col, max_col=col),TODAY_FILLER)
 
 
 """
