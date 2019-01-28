@@ -2,6 +2,7 @@ import time
 from datetime import date, timedelta, datetime
 import pandas as pd
 import openpyxl as xl
+import xlrd
 import sys
 import os
 from openpyxl.styles import PatternFill, Alignment, Font
@@ -40,10 +41,14 @@ UNAPPRV_FILLER = PatternFill(patternType=None, start_color=UNAPPRV_COLOR, end_co
 
 
 '''
-Returns the Sunday before <date> if <date> is not already Sunday
+Returns the Sunday before pdate if pdate is not already Sunday
 '''
 def getSunday(pdate):
     ndate = pdate
+    #Start converting parameter to datetime type
+    #   if it's a string it tries to interpret it as formatted as:
+    #       mm/dd/yyyy
+    #   if it's a date type it just crete a date time using parameter year, month and day
     if type(pdate) is str :
         if len(pdate) == 10:
             ndate = datetime(int(pdate[-4:]), int(pdate[0:2]), int(pdate[-7:-5]))
@@ -51,7 +56,13 @@ def getSunday(pdate):
             ndate = None
     elif type(ndate) is date:
         ndate = datetime(ndate.year, ndate.month, ndate.day)
+
+    #Get day of week, ie one of Monday to Sunday where Monday is 0,
+    #Tuesday 1, Wenesday 2, Thursday 3,  Friday 4, Saturday 5 and Sunday 6
     dow = ndate.weekday()
+
+    #If day of week is Sunday(6) we are OK
+    #If it's not then we calculate a the date for previous Sunday
     if dow < 6:
         ndate = ndate - timedelta(dow+1)
     return ndate
@@ -105,6 +116,7 @@ and rate. Rate 0 is set to a different color
 def actuals_sheet(ws, actuals, date_col, apprv):
     row = 1
     start_col = 3
+    #Data is grouped by Consultant name, rate, and date all other data is summarized
     actuals_gb = actuals.groupby(by=[DF_ANAME, DF_RATE, DF_DATE]).sum()
     name = None
     rate = -1.0
@@ -115,9 +127,11 @@ def actuals_sheet(ws, actuals, date_col, apprv):
             ws.cell(row, 2, index[1]) #rate
             if index[1] == 0:
                 set_color(ws.iter_cols(min_row=row, max_row=row, min_col=2),ZERO_FILLER)
+        #Set a different color if time has not been approved
         if apprv and group[DF_APPRV] < 0:
             set_color(ws.iter_cols(min_row=row, max_row=row, min_col=2), UNAPPRV_FILLER)
         ws.cell(row,start_col + date_col[index[2]], group[DF_HOURS])
+        #!!!!Not sure if next if is required. It lokks like the than the 2 lines above
         if apprv and group[DF_APPRV] < 0:
             set_color(ws.iter_cols(min_row=row, max_row=row, min_col=2), UNAPPRV_FILLER)
         name = index[0]
@@ -361,12 +375,20 @@ if __name__ == '__main__':
             out = sys.argv[3]
         else:
             out = "TEST.xlsx"
-        if fcstxl.endswith('.xlsx') and actxl.endswith('.xlsx'):
+        if (fcstxl.endswith('.xlsx') or fcstxl.endswith('.xls')) and (actxl.endswith('.xlsx') or actxl.endswith('.xls')):
             try:
                 os.stat(fcstxl)
                 os.stat(actxl)
-                fcst = pd.read_excel(fcstxl, header=6, converters={4: getSunday})
-                actuals = pd.read_excel(actxl,header=7, converters={'Entry Date': getSunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
+                if fcstxl.endswith('.xls'):
+                    book = xlrd.open_workbook(fcstxl)
+                    fcst = pd.read_excel(book, engine='xlrd', header=6, converters={4: getSunday})
+                else:
+                    fcst = pd.read_excel(fcstxl, header=6, converters={4: getSunday})
+                if actxl.endswith('.xls'):
+                    book = xlrd.open_workbook(actxl)
+                    actuals = pd.read_excel(book, engine='xlrd', header=6, converters={4: getSunday})
+                else:
+                    actuals = pd.read_excel(actxl,header=7, converters={'Entry Date': getSunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
                 wb = process(fcst,actuals)
                 wb.save(out)
                 wb.close()
