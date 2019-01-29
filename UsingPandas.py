@@ -161,7 +161,7 @@ last week to last week with forecast data will fill next weeks. Rate for forecas
 spradsheet user. Special colors ha been set for rate value 0 and for forecast rows.
 """
 def fcst_act_sheet(ws, fcst, actuals, date_col):
-    fcst_date = getSunday(date.today())
+    fcst_date = actuals[DF_DATE].max()
     row = 1
     start_col = 3
     actuals_gb = actuals.groupby(by=[DF_ANAME, DF_RATE, DF_DATE]).sum()
