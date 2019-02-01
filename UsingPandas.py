@@ -6,6 +6,7 @@ import xlrd
 import sys
 import os
 from openpyxl.styles import PatternFill, Alignment, Font
+import argparse
 
 DF_ANAME = 'Associate Name'
 DF_DATE  = 'Date'
@@ -13,12 +14,16 @@ DF_HOURS = 'Hours'
 DF_COST  = 'Cost'
 DF_RATE  = 'Rate'
 DF_APPRV = 'Timesheet is Approved'
+
 WS_THOURS = 'Total Hours'
 WS_TCOST  = 'Total Cost'
+WS_RATE_RES = 'Resource'
+WS_RATE_ACT_RATE = 'Actual Billing Rate'
 WSN_ACTUALS = 'Actuals'
 WSN_FCST = 'Forecast'
 WSN_ACTFCST = 'Actuals+Forecast'
 WSN_NOTAPPRV = 'Not Approved'
+WSN_RATES = 'Rates'
 
 ACTUALS2DROP= ['Client Reporting Unit', 'Client Name', 'Project Name', 'Client PO#', 'Project Manager',
                'AssociateId', 'AssociateType', 'Period Start Date', 'Task Name', 'Billable Hours', 'Billing Rule Name',
@@ -26,6 +31,7 @@ ACTUALS2DROP= ['Client Reporting Unit', 'Client Name', 'Project Name', 'Client P
                'JTRAX Invoiced Status/Ref #', 'Invoice Through Date', 'Service Delivery Location', 'Entry Note',
                'On Hold for Billing', 'On Hold Reason']
 FCST2DROP = ['Role', 'Project', 'Actual Hours','User Last Name', 'User First Name']
+RATES2DROP = ['Hard Booked Hours','Forecasted Cost Rate','Forecasted Billing Rate','Actual Cost Rate']
 
 FORECAST_COLOR="CCFFCC"
 TODAY_COLOR="00B050"
@@ -39,6 +45,7 @@ TODAY_FILLER = PatternFill(patternType=None, start_color=TODAY_COLOR, end_color=
 DATES_FILLER = PatternFill(patternType=None, start_color=DATES_COLOR, end_color=DATES_COLOR, fill_type="solid")
 UNAPPRV_FILLER = PatternFill(patternType=None, start_color=UNAPPRV_COLOR, end_color=UNAPPRV_COLOR, fill_type="solid")
 
+RATE_FORMULA = '=VLOOKUP(A{0},Rates!$A$2:$B${1},2,FALSE)'
 
 '''
 Returns the Sunday before pdate if pdate is not already Sunday
@@ -160,7 +167,7 @@ Combining Actuals and Forecast data in one sheet. Actuals data fills the sheet u
 last week to last week with forecast data will fill next weeks. Rate for forecast has to be set by 
 spradsheet user. Special colors ha been set for rate value 0 and for forecast rows.
 """
-def fcst_act_sheet(ws, fcst, actuals, date_col):
+def fcst_act_sheet(ws, fcst, actuals, date_col, rate_rows):
     fcst_date = actuals[DF_DATE].max()
     row = 1
     start_col = 3
@@ -172,7 +179,13 @@ def fcst_act_sheet(ws, fcst, actuals, date_col):
             row += 1
             if name != index[0]:
                 if name is not None:
-                    c = ws.cell(row, 1, name)
+                    ws.cell(row, 1, name)
+                    if rate_rows is not None:
+                        c = ws.cell(row, 2)
+                        c.number_format = '#,##0.00'
+                        c.set_explicit_value(RATE_FORMULA.format(row, rate_rows), data_type='f')
+                        c.value =  RATE_FORMULA.format(row, rate_rows)
+                        #, data_type = 'f')
                     set_color(ws.iter_cols(min_row=row, max_row=row, min_col=1), FCST_FILLER)
                     res_fcst = fcst.loc[(fcst[DF_ANAME] == name) & (fcst[DF_DATE] >= fcst_date)]
                     res_fcst_gb = res_fcst.groupby(by=[DF_ANAME, DF_DATE]).sum()
@@ -225,6 +238,20 @@ def set_color(iter, fill):
         for cell in sset:
             cell.fill = fill
 
+"""
+Parse rate data
+"""
+def parse_rate(s):
+    if s.strip() == 'None':
+        return None
+    else:
+        try:
+            rate=float(s.strip('USD $').strip('/Hour'))
+            return rate
+        except ValueError:
+            return 0.0
+
+
 
 """
 Add sum formula to all rows with data
@@ -246,6 +273,7 @@ def addFormulas(ws, shift, is_actual):
             c = ws.cell(r[0].row,cost)
             c.number_format = '#,##0.00'
             c.set_explicit_value(cost_formula.format(h_col,r[0].row),data_type='f')
+
     c = ws.cell(ws.max_row+1, hours)
     c.set_explicit_value(autosum_formula.format(c.column,c.row-1),data_type='f')
     c.number_format = '#,##0.00'
@@ -255,9 +283,11 @@ def addFormulas(ws, shift, is_actual):
         c.number_format = '#,##0.00'
 
 
-def process(fcst, actuals):
+
+def process(fcst, actuals, rates):
+
     '''
-    This function will process a spreadsheet where columns are:
+    Forecast columns are:
     .__________________________________.
     |   Column data      |Column index |
     .__________________________________.
@@ -289,7 +319,7 @@ def process(fcst, actuals):
     max_name_len = fcst[DF_ANAME].map(len).max()
 
     '''
-    This function will process a spreadsheet where columns are:
+    Actuals columns are:
     .__________________________________________________.
     |         Column data               | Column index |
     .__________________________________________________.
@@ -341,11 +371,54 @@ def process(fcst, actuals):
         max_name_len = tmp_len
     actuals[DF_RATE] = actuals[DF_COST] / actuals[DF_HOURS]
 
+
     wb = xl.Workbook()
     dcmap = create_date_seq(from_date, to_date)
     create_headers(wb.active, WSN_ACTUALS, dcmap, True, max_name_len)
     create_headers(wb.create_sheet(), WSN_FCST, dcmap, False, max_name_len)
     create_headers(wb.create_sheet(), WSN_ACTFCST, dcmap, True, max_name_len)
+
+    '''
+    Rates columns are:
+    .__________________________________.
+    |   Column data         |Column index |
+    ._____________________________________.
+    |Resource               |     0       |
+    |Hard Booked Hours      |     1       |
+    |Forecasted Cost Rate   |     2       |
+    |Forecasted Billing Rate|     3       |
+    |Actual Cost Rate       |     4       |
+    |Actual Billing Rate    |     5       |
+    ._____________________________________.
+
+    Relevant data to be kept is consultant name (column 0), actual billing rate (columns 5).
+    First row with data is 1.
+    '''
+    r_rows = None
+    if rates is not None:
+        rates = rates.drop(RATES2DROP,1)
+        tmp_len = rates['Resource'].map(len).max()
+        if tmp_len > max_name_len:
+            max_name_len = tmp_len
+        #Rates spreadsheet
+        ratesws = wb.create_sheet()
+        ratesws.title = WSN_RATES
+        row = 1
+        c = ratesws.cell(row, 1, WS_RATE_RES)
+        c.alignment = Alignment(wrap_text=True, horizontal='center')
+        c.font = Font(bold=True)
+        c = ratesws.cell(row, 2, WS_RATE_ACT_RATE)
+        c.alignment = Alignment(wrap_text=True, horizontal='center')
+        c.font = Font(bold=True)
+
+        ratesws.column_dimensions['A'].width = max_name_len
+
+        row += 1
+        for index, data in rates.iterrows():
+            ratesws.cell(row, 1,data[WS_RATE_RES])
+            ratesws.cell(row, 2, data[WS_RATE_ACT_RATE])
+            row +=1
+        r_rows = row - 1
 
     actuals_sheet(wb[WSN_ACTUALS], actuals, dcmap, True)
     addFormulas(wb[WSN_ACTUALS], max(dcmap.values()), True)
@@ -353,7 +426,7 @@ def process(fcst, actuals):
     forecast_sheet(wb[WSN_FCST], fcst, dcmap)
     addFormulas(wb[WSN_FCST], max(dcmap.values()), False)
 
-    fcst_act_sheet(wb[WSN_ACTFCST], fcst, actuals, dcmap)
+    fcst_act_sheet(wb[WSN_ACTFCST], fcst, actuals, dcmap, r_rows)
     addFormulas(wb[WSN_ACTFCST], max(dcmap.values()), True)
 
     df_napprv = actuals[actuals[DF_APPRV] < 0]
@@ -368,35 +441,74 @@ def process(fcst, actuals):
 
 if __name__ == '__main__':
     start = time.time()
-    if len(sys.argv) >= 3:
-        fcstxl = sys.argv[1]
-        actxl = sys.argv[2]
-        if len(sys.argv) >= 4:
-            out = sys.argv[3]
-        else:
-            out = "TEST.xlsx"
-        if (fcstxl.endswith('.xlsx') or fcstxl.endswith('.xls')) and (actxl.endswith('.xlsx') or actxl.endswith('.xls')):
-            try:
-                os.stat(fcstxl)
-                os.stat(actxl)
-                if fcstxl.endswith('.xls'):
-                    book = xlrd.open_workbook(fcstxl)
-                    fcst = pd.read_excel(book, engine='xlrd', header=6, converters={4: getSunday})
+    parser = argparse.ArgumentParser(description='JDA PM tool for actuals + forecast')
+    parser.add_argument('--fcst', '-fcst', required=True, help='Forecast data spreadsheet (.xls or .xlsx file)')
+    parser.add_argument('--act', '-act', required=True, help='Actuals data spreadsheet (.xls or .xlsx file)')
+    parser.add_argument('--out', '-out', help='Output Excel file (.xlsx)', default='JDAFcstActuals.xlsx')
+    parser.add_argument('--rates', '-rates', help='Rates data spreadsheet (.xls or .xlsx file)')
+    params = parser.parse_args()
+
+    out = params.out
+    fcstxl = params.fcst
+    actxl = params.act
+    ratesxl = params.rates
+    if (fcstxl.endswith('.xlsx') or fcstxl.endswith('.xls')) and (actxl.endswith('.xlsx') or actxl.endswith('.xls')):
+        try:
+            os.stat(fcstxl)
+        except WindowsError:
+            print("ERROR: file \n\t{0} \ndoes not exists\n\n".format(fcstxl))
+            input('Press ENTER to exit')
+            exit(-1)
+        try:
+            os.stat(actxl)
+        except WindowsError:
+            print("ERROR: file \n{0} \ndoes not exists\n\n".format(actxl))
+            input('Press ENTER to exit')
+            exit(-11)
+        try:
+            if fcstxl.endswith('.xls'):
+                book = xlrd.open_workbook(fcstxl)
+                fcst = pd.read_excel(book, engine='xlrd', header=6, converters={4: getSunday})
+            else:
+                fcst = pd.read_excel(fcstxl, header=6, converters={4: getSunday})
+        except Exception:
+            print("There's somthing wrong with file format for \n{0}".format(fcstxl))
+            input('Press ENTER to exit')
+            exit(-2)
+        try:
+            if actxl.endswith('.xls'):
+                book = xlrd.open_workbook(actxl)
+                actuals = pd.read_excel(book, engine='xlrd', header=6, converters={'Entry Date': getSunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
+            else:
+                actuals = pd.read_excel(actxl,header=7, converters={'Entry Date': getSunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
+        except Exception:
+            print("There's somthing wrong with file format for \n{0}".format(actxl))
+            input('Press ENTER to exit')
+            exit(-2)
+        try:
+            if ratesxl is None:
+                ratesxl = None
+            else:
+                if ratesxl.endswith('.xls'):
+                    book = xlrd.open_workbook(ratesxl)
+                    rates = pd.read_excel(book, engine='xlrd', header=0, converters={'Actual Billing Rate': parse_rate})
                 else:
-                    fcst = pd.read_excel(fcstxl, header=6, converters={4: getSunday})
-                if actxl.endswith('.xls'):
-                    book = xlrd.open_workbook(actxl)
-                    actuals = pd.read_excel(book, engine='xlrd', header=6, converters={4: getSunday})
-                else:
-                    actuals = pd.read_excel(actxl,header=7, converters={'Entry Date': getSunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
-                wb = process(fcst,actuals)
-                wb.save(out)
-                wb.close()
-                print('Done!')
-            except WindowsError:
-                print("Error: file does not exists")
-        else:
-            print("Error: files are not in OOXML formal .xlsx")
+                    rates = pd.read_excel(ratesxl,header=0, converters={'Actual Billing Rate': parse_rate})
+        except Exception:
+            print("There's somthing wrong with file format for \n{0}".format(actxl))
+            input('Press ENTER to exit')
+            exit(-2)
+
+
+        try:
+            wb = process(fcst,actuals,rates)
+            wb.save(out)
+            wb.close()
+            print('Done!')
+        except Exception as excp:
+            print(excp)
+            input('Press ENTER to exit')
+            exit(-2)
     else:
-        print("Error: Invocation should be:\n python JDAProjActuals.py <forecast workbook path> <actuals workbook path>")
+        print("Error: files are not in OOXML format .xlsx nor BIFF format .xls")
     print("Executed in {0:.5f} seconds".format((time.time()-start)))
