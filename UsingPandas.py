@@ -17,6 +17,10 @@ DF_APPRV = 'Timesheet is Approved'
 
 WS_THOURS = 'Total Hours'
 WS_TCOST  = 'Total Cost'
+WS_R0HRS = 'Total Hours Rate USD 0'
+WS_R0ALT = 'Alt Total for Rate USD 0'
+WS_TFCSTH = 'Total Forecast Hours'
+WS_TFCSTC = 'Total Forecast Cost'
 WS_RATE_RES = 'Resource'
 WS_RATE_ACT_RATE = 'Actual Billing Rate'
 WSN_ACTUALS = 'Actuals'
@@ -80,7 +84,7 @@ Build headers for the worksheet. Has a row for resource name, if it contains act
 with resource rate, one column for each week from the first week in project up to the last week in
 the forecast. There are two columns after weeks one to sum hours and one to sum cost
 '''
-def create_headers(ws, title, dcmap, is_actual, max_name_len):
+def create_headers(ws, title, dcmap, is_actual, max_name_len, is_faa):
     #Set worksheet name
     ws.title = title
     ws.insert_rows(1, 2)
@@ -105,7 +109,8 @@ def create_headers(ws, title, dcmap, is_actual, max_name_len):
     c.font = font
     ws.column_dimensions[c.column].width = 13
     if is_actual:
-        c = ws.cell(1, curr_col+1, WS_TCOST)
+        curr_col += 1
+        c = ws.cell(1, curr_col, WS_TCOST)
         c.fill = DATES_FILLER
         c.alignment = r
         c.font = font
@@ -114,6 +119,31 @@ def create_headers(ws, title, dcmap, is_actual, max_name_len):
     else:
         ws.freeze_panes = 'B2'
     ws.column_dimensions['A'].width = max_name_len
+    if is_faa:
+        curr_col += 1
+        c = ws.cell(1, curr_col, WS_R0HRS)
+        c.fill = DATES_FILLER
+        c.alignment = r
+        c.font = font
+        ws.column_dimensions[c.column].width = 13
+        curr_col += 1
+        c = ws.cell(1, curr_col, WS_R0ALT)
+        c.fill = DATES_FILLER
+        c.alignment = r
+        c.font = font
+        ws.column_dimensions[c.column].width = 13
+        curr_col += 1
+        c = ws.cell(1, curr_col, WS_TFCSTH)
+        c.fill = DATES_FILLER
+        c.alignment = r
+        c.font = font
+        ws.column_dimensions[c.column].width = 13
+        curr_col += 1
+        c = ws.cell(1, curr_col, WS_TFCSTC)
+        c.fill = DATES_FILLER
+        c.alignment = r
+        c.font = font
+        ws.column_dimensions[c.column].width = 13
 
 
 """
@@ -168,13 +198,16 @@ last week to last week with forecast data will fill next weeks. Rate for forecas
 spradsheet user. Special colors ha been set for rate value 0 and for forecast rows.
 """
 def fcst_act_sheet(ws, fcst, actuals, date_col, rate_rows):
+    """Forecast date is set as the last week having actuals even if it should be next week"""
     fcst_date = actuals[DF_DATE].max()
     row = 1
     start_col = 3
+    """Acual data is grouped by resource, rate and week summing up reported time"""
     actuals_gb = actuals.groupby(by=[DF_ANAME, DF_RATE, DF_DATE]).sum()
     name = None
     rate = -1.0
     for index, group in actuals_gb.iterrows():
+        """When there's a change of resource or rate we add a new row"""
         if name != index[0] or rate != index[1]:
             row += 1
             if name != index[0]:
@@ -187,7 +220,7 @@ def fcst_act_sheet(ws, fcst, actuals, date_col, rate_rows):
                         c.value =  RATE_FORMULA.format(row, rate_rows)
                         #, data_type = 'f')
                     set_color(ws.iter_cols(min_row=row, max_row=row, min_col=1), FCST_FILLER)
-                    res_fcst = fcst.loc[(fcst[DF_ANAME] == name) & (fcst[DF_DATE] >= fcst_date)]
+                    res_fcst = fcst.loc[(fcst[DF_ANAME] == name) & (fcst[DF_DATE] > fcst_date)]
                     res_fcst_gb = res_fcst.groupby(by=[DF_ANAME, DF_DATE]).sum()
                     for index_fcst, group_fcst in res_fcst_gb.iterrows():
                         ws.cell(row, start_col + date_col[index_fcst[1]], group_fcst[DF_HOURS])
@@ -214,7 +247,7 @@ def fcst_act_sheet(ws, fcst, actuals, date_col, rate_rows):
         ws.cell(row, start_col + date_col[index_fcst[1]], group_fcst[DF_HOURS])
 
     if fcst_date in date_col:
-        col = date_col[fcst_date]+2
+        col = date_col[fcst_date] + 3
         set_color(ws.iter_cols(min_row=2, min_col=col, max_col=col),TODAY_FILLER)
 
 
@@ -238,6 +271,7 @@ def set_color(iter, fill):
         for cell in sset:
             cell.fill = fill
 
+
 """
 Parse rate data
 """
@@ -252,11 +286,10 @@ def parse_rate(s):
             return 0.0
 
 
-
 """
 Add sum formula to all rows with data
 """
-def addFormulas(ws, shift, is_actual):
+def addFormulas(ws, shift, is_actual, is_faa):
     start_col = 3 if is_actual else 2
     last_col = ws.cell(1, start_col+shift).column
     hours_formula = "=SUM({0}{1}:{2}{1})"
@@ -265,14 +298,39 @@ def addFormulas(ws, shift, is_actual):
     hours = start_col + shift + 1
     cost = hours + 1
     for r in ws.iter_rows(min_row=2):
-        c = ws.cell(r[0].row, hours)
-        c.number_format = '#,##0.00'
-        c.set_explicit_value(hours_formula.format('C',r[0].row,last_col), data_type = 'f')
-        if is_actual:
-            h_col = c.column
-            c = ws.cell(r[0].row,cost)
+        if is_faa:
+            c = ws.cell(r[0].row,start_col -1)
+            #Totalizing rate 0 actauals
+            if c.fill == ZERO_FILLER or (c.fill == UNAPPRV_FILLER and c.value == 0):
+                c = ws.cell(r[0].row, hours + 2)
+                c.number_format = '#,##0.00'
+                c.set_explicit_value(hours_formula.format('C',r[0].row,last_col), data_type = 'f')
+                h_col = c.column
+                c = ws.cell(r[0].row,cost + 2)
+                c.number_format = '#,##0.00'
+                c.set_explicit_value(cost_formula.format(h_col,r[0].row),data_type='f')
+            #Totalizing forecast
+            elif c.fill == FCST_FILLER:
+                c = ws.cell(r[0].row, hours + 4)
+                c.number_format = '#,##0.00'
+                c.set_explicit_value(hours_formula.format('C',r[0].row,last_col), data_type = 'f')
+                h_col = c.column
+                c = ws.cell(r[0].row,cost + 4)
+                c.number_format = '#,##0.00'
+                c.set_explicit_value(cost_formula.format(h_col,r[0].row),data_type='f')
+            else:
+                c = ws.cell(r[0].row, hours)
+                c.number_format = '#,##0.00'
+                c.set_explicit_value(hours_formula.format('C', r[0].row, last_col), data_type='f')
+                if is_actual:
+                    h_col = c.column
+                    c = ws.cell(r[0].row,cost)
+                    c.number_format = '#,##0.00'
+                    c.set_explicit_value(cost_formula.format(h_col,r[0].row),data_type='f')
+        else:
+            c = ws.cell(r[0].row, hours)
             c.number_format = '#,##0.00'
-            c.set_explicit_value(cost_formula.format(h_col,r[0].row),data_type='f')
+            c.set_explicit_value(hours_formula.format('C', r[0].row, last_col), data_type='f')
 
     c = ws.cell(ws.max_row+1, hours)
     c.set_explicit_value(autosum_formula.format(c.column,c.row-1),data_type='f')
@@ -281,6 +339,19 @@ def addFormulas(ws, shift, is_actual):
         c = ws.cell(ws.max_row, cost)
         c.set_explicit_value(autosum_formula.format(c.column,c.row-1),data_type='f')
         c.number_format = '#,##0.00'
+    if is_faa:
+        col = cost +1
+        c = ws.cell(ws.max_row,col)
+        c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+        col += 1
+        c = ws.cell(ws.max_row,col)
+        c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+        col += 1
+        c = ws.cell(ws.max_row,col)
+        c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+        col += 1
+        c = ws.cell(ws.max_row,col)
+        c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
 
 
 
@@ -371,12 +442,11 @@ def process(fcst, actuals, rates):
         max_name_len = tmp_len
     actuals[DF_RATE] = actuals[DF_COST] / actuals[DF_HOURS]
 
-
     wb = xl.Workbook()
     dcmap = create_date_seq(from_date, to_date)
-    create_headers(wb.active, WSN_ACTUALS, dcmap, True, max_name_len)
-    create_headers(wb.create_sheet(), WSN_FCST, dcmap, False, max_name_len)
-    create_headers(wb.create_sheet(), WSN_ACTFCST, dcmap, True, max_name_len)
+    create_headers(wb.active, WSN_ACTUALS, dcmap, True, max_name_len,False)
+    create_headers(wb.create_sheet(), WSN_FCST, dcmap, False, max_name_len,False)
+    create_headers(wb.create_sheet(), WSN_ACTFCST, dcmap, True, max_name_len,True)
 
     '''
     Rates columns are:
@@ -421,22 +491,22 @@ def process(fcst, actuals, rates):
         r_rows = row - 1
 
     actuals_sheet(wb[WSN_ACTUALS], actuals, dcmap, True)
-    addFormulas(wb[WSN_ACTUALS], max(dcmap.values()), True)
+    addFormulas(wb[WSN_ACTUALS], max(dcmap.values()), True, False)
 
     forecast_sheet(wb[WSN_FCST], fcst, dcmap)
-    addFormulas(wb[WSN_FCST], max(dcmap.values()), False)
+    addFormulas(wb[WSN_FCST], max(dcmap.values()), False, False)
 
     fcst_act_sheet(wb[WSN_ACTFCST], fcst, actuals, dcmap, r_rows)
-    addFormulas(wb[WSN_ACTFCST], max(dcmap.values()), True)
+    addFormulas(wb[WSN_ACTFCST], max(dcmap.values()), True, True)
 
     df_napprv = actuals[actuals[DF_APPRV] < 0]
     if df_napprv.size > 0:
         from_date = df_napprv[DF_DATE].min().date()
         to_date = df_napprv[DF_DATE].max().date()
         dcmap = create_date_seq(from_date, to_date)
-        create_headers(wb.create_sheet(), WSN_NOTAPPRV, dcmap, True, max_name_len)
+        create_headers(wb.create_sheet(), WSN_NOTAPPRV, dcmap, True, max_name_len,False)
         actuals_sheet(wb[WSN_NOTAPPRV], df_napprv, dcmap, False)
-        addFormulas(wb[WSN_NOTAPPRV], max(dcmap.values()), True)
+        addFormulas(wb[WSN_NOTAPPRV], max(dcmap.values()), True, False)
     return wb
 
 if __name__ == '__main__':
@@ -498,8 +568,6 @@ if __name__ == '__main__':
             print("There's somthing wrong with file format for \n{0}".format(actxl))
             input('Press ENTER to exit')
             exit(-2)
-
-
         try:
             wb = process(fcst,actuals,rates)
             wb.save(out)
