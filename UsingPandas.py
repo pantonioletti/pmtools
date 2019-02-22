@@ -335,23 +335,34 @@ def addFormulas(ws, shift, is_actual, is_faa):
     c = ws.cell(ws.max_row+1, hours)
     c.set_explicit_value(autosum_formula.format(c.column,c.row-1),data_type='f')
     c.number_format = '#,##0.00'
+    font = Font(bold=True)
+    c.font = font
     if is_actual:
         c = ws.cell(ws.max_row, cost)
         c.set_explicit_value(autosum_formula.format(c.column,c.row-1),data_type='f')
         c.number_format = '#,##0.00'
-    if is_faa:
-        col = cost +1
-        c = ws.cell(ws.max_row,col)
-        c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
-        col += 1
-        c = ws.cell(ws.max_row,col)
-        c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
-        col += 1
-        c = ws.cell(ws.max_row,col)
-        c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
-        col += 1
-        c = ws.cell(ws.max_row,col)
-        c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+        c.font = font
+        if is_faa:
+            col = cost +1
+            c = ws.cell(ws.max_row,col)
+            c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+            c.number_format = '#,##0.00'
+            c.font = font
+            col += 1
+            c = ws.cell(ws.max_row,col)
+            c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+            c.number_format = '#,##0.00'
+            c.font = font
+            col += 1
+            c = ws.cell(ws.max_row,col)
+            c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+            c.number_format = '#,##0.00'
+            c.font = font
+            col += 1
+            c = ws.cell(ws.max_row,col)
+            c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+            c.number_format = '#,##0.00'
+            c.font = font
 
 
 
