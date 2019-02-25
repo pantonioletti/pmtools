@@ -2,7 +2,6 @@ from waitress import serve
 import falcon
 import pandas as pd
 from openpyxl.writer.excel import save_virtual_workbook
-import UsingPandas as upd
 from werkzeug.wrappers import Request
 import io
 import UsingPandas as up
@@ -11,8 +10,8 @@ import UsingPandas as up
 CONST_FCST_FILE="ForecastFile"
 CONST_ACT_FILE="ActualsFile"
 FCST_DATE=4
-ACT_DATE=23
-ACT_IS_APPRVD=18
+ACT_DATE='Entry Date'
+ACT_IS_APPRVD='Timesheet is Approved'
 HTML_XL_CONTENT_TYPE='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 
@@ -32,8 +31,14 @@ class PMTools(object):
 
         files = wz.files
         if len(files) > 1:
-            fcst = pd.read_excel(io.BytesIO(files[CONST_FCST_FILE].stream.read()),engine='xlrd', header=6, converters={FCST_DATE: up.getSunday})
-            actuals = pd.read_excel(io.BytesIO(files[CONST_ACT_FILE].stream.read()),engine='xlrd', header=7, converters={ACT_DATE: up.getSunday,
+            engine = None
+            if files[CONST_FCST_FILE].filename is not None and files[CONST_FCST_FILE].filename.lower().endswith(".xls"):
+                engine = 'xlrd'
+            fcst = pd.read_excel(io.BytesIO(files[CONST_FCST_FILE].stream.read()),engine=engine, header=6, converters={FCST_DATE: up.getSunday})
+            engine = None
+            if files[CONST_ACT_FILE].filename is not None and files[CONST_ACT_FILE].filename.lower().endswith(".xls"):
+                engine = 'xlrd'
+            actuals = pd.read_excel(io.BytesIO(files[CONST_ACT_FILE].stream.read()),engine=engine, header=7, converters={ACT_DATE: up.getSunday,
                                                          ACT_IS_APPRVD: lambda x: 0 if x == 'Y' else -1})
             fplusa = up.process(fcst,actuals)
             resp.set_header("Content-Disposition", "attachment; filename=\"forecast_actuals.xlsx\"")
