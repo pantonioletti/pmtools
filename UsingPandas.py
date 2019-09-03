@@ -3,7 +3,6 @@ from datetime import date, timedelta, datetime
 import pandas as pd
 import openpyxl as xl
 import xlrd
-import sys
 import os
 from openpyxl.styles import PatternFill, Alignment, Font
 import argparse
@@ -35,7 +34,7 @@ ACTUALS2DROP= ['Client Reporting Unit', 'Client Name', 'Project Name', 'Client P
                'JTRAX Invoiced Status/Ref #', 'Invoice Through Date', 'Service Delivery Location', 'Entry Note',
                'On Hold for Billing', 'On Hold Reason']
 FCST2DROP = ['Role', 'Project', 'Actual Hours','User Last Name', 'User First Name']
-RATES2DROP = ['Hard Booked Hours','Forecasted Cost Rate','Forecasted Billing Rate','Actual Cost Rate']
+RATES2DROP = ['Resource Type','Hard Booked Hours','Forecasted Cost Rate','Forecasted Billing Rate','Actual Cost Rate']
 
 FORECAST_COLOR="CCFFCC"
 TODAY_COLOR="00B050"
@@ -54,7 +53,7 @@ RATE_FORMULA = '=VLOOKUP(A{0},Rates!$A$2:$B${1},2,FALSE)'
 '''
 Returns the Sunday before pdate if pdate is not already Sunday
 '''
-def getSunday(pdate):
+def get_sunday(pdate):
     ndate = pdate
     #Start converting parameter to datetime type
     #   if it's a string it tries to interpret it as formatted as:
@@ -150,11 +149,11 @@ def create_headers(ws, title, dcmap, is_actual, max_name_len, is_faa):
 Processing for actuals sheet loaded in actuals DataFrame dat will be grouped by Associate Name
 and rate. Rate 0 is set to a different color
 """
-def actuals_sheet(ws, actuals, date_col, apprv):
+def actuals_sheet(ws, p_actuals, date_col, apprv):
     row = 1
     start_col = 3
     #Data is grouped by Consultant name, rate, and date all other data is summarized
-    actuals_gb = actuals.groupby(by=[DF_ANAME, DF_RATE, DF_DATE]).sum()
+    actuals_gb = p_actuals.groupby(by=[DF_ANAME, DF_RATE, DF_DATE]).sum()
     name = None
     rate = -1.0
     for index, group in actuals_gb.iterrows():
@@ -178,10 +177,10 @@ def actuals_sheet(ws, actuals, date_col, apprv):
 """
 Processings for forecast sheet loaded in fcst DataFrame
 """
-def forecast_sheet(ws, fcst, date_col):
+def forecast_sheet(ws, p_fcst, date_col):
     row = 1
     start_col = 2
-    fcst_gb = fcst.groupby(by=[DF_ANAME, DF_DATE]).sum()
+    fcst_gb = p_fcst.groupby(by=[DF_ANAME, DF_DATE]).sum()
     curr_name = ''
     for index, group in fcst_gb.iterrows():
         name = index[0]
@@ -192,18 +191,34 @@ def forecast_sheet(ws, fcst, date_col):
         curr_name = name
 
 
+def add_forecast(ws, row, name, p_fcst, rate_rows, fcst_date, start_col, date_col):
+    if name is not None:
+        ws.cell(row, 1, name)
+        if rate_rows is not None:
+            c = ws.cell(row, 2)
+            c.number_format = '#,##0.00'
+            c.set_explicit_value(RATE_FORMULA.format(row, rate_rows), data_type='f')
+            c.value = RATE_FORMULA.format(row, rate_rows)
+            # , data_type = 'f')
+        set_color(ws.iter_cols(min_row=row, max_row=row, min_col=1), FCST_FILLER)
+        res_fcst = p_fcst.loc[(p_fcst[DF_ANAME] == name) & (p_fcst[DF_DATE] > fcst_date)]
+        res_fcst_gb = res_fcst.groupby(by=[DF_ANAME, DF_DATE]).sum()
+        for index_fcst, group_fcst in res_fcst_gb.iterrows():
+            ws.cell(row, start_col + date_col[index_fcst[1]], group_fcst[DF_HOURS])
+
+
 """
 Combining Actuals and Forecast data in one sheet. Actuals data fills the sheet up to last week. Since
 last week to last week with forecast data will fill next weeks. Rate for forecast has to be set by 
 spradsheet user. Special colors ha been set for rate value 0 and for forecast rows.
 """
-def fcst_act_sheet(ws, fcst, actuals, date_col, rate_rows):
+def fcst_act_sheet(ws, p_fcst, p_actuals, date_col, rate_rows):
     """Forecast date is set as the last week having actuals even if it should be next week"""
-    fcst_date = actuals[DF_DATE].max()
+    fcst_date = p_actuals[DF_DATE].max()
     row = 1
     start_col = 3
     """Acual data is grouped by resource, rate and week summing up reported time"""
-    actuals_gb = actuals.groupby(by=[DF_ANAME, DF_RATE, DF_DATE]).sum()
+    actuals_gb = p_actuals.groupby(by=[DF_ANAME, DF_RATE, DF_DATE]).sum()
     name = None
     rate = -1.0
     for index, group in actuals_gb.iterrows():
@@ -211,19 +226,8 @@ def fcst_act_sheet(ws, fcst, actuals, date_col, rate_rows):
         if name != index[0] or rate != index[1]:
             row += 1
             if name != index[0]:
+                add_forecast(ws, row, name, p_fcst, rate_rows, fcst_date, start_col, date_col)
                 if name is not None:
-                    ws.cell(row, 1, name)
-                    if rate_rows is not None:
-                        c = ws.cell(row, 2)
-                        c.number_format = '#,##0.00'
-                        c.set_explicit_value(RATE_FORMULA.format(row, rate_rows), data_type='f')
-                        c.value =  RATE_FORMULA.format(row, rate_rows)
-                        #, data_type = 'f')
-                    set_color(ws.iter_cols(min_row=row, max_row=row, min_col=1), FCST_FILLER)
-                    res_fcst = fcst.loc[(fcst[DF_ANAME] == name) & (fcst[DF_DATE] > fcst_date)]
-                    res_fcst_gb = res_fcst.groupby(by=[DF_ANAME, DF_DATE]).sum()
-                    for index_fcst, group_fcst in res_fcst_gb.iterrows():
-                        ws.cell(row, start_col + date_col[index_fcst[1]], group_fcst[DF_HOURS])
                     row += 1
                 name = index[0]
             rate = index[1]
@@ -234,14 +238,19 @@ def fcst_act_sheet(ws, fcst, actuals, date_col, rate_rows):
         ws.cell(row,start_col + date_col[index[2]], group[DF_HOURS])
         if group[DF_APPRV] < 0:
             set_color(ws.iter_cols(min_row=row, max_row=row, min_col=2), UNAPPRV_FILLER)
-    res_fcst = fcst.loc[fcst[DF_DATE] >= fcst_date]
-    res_fcst_gb=res_fcst[~res_fcst[DF_ANAME].isin(actuals[DF_ANAME])].groupby(by=[DF_ANAME, DF_DATE]).sum()
+
+    if name is not None:
+        row += 1
+        add_forecast(ws, row, name, p_fcst, rate_rows, fcst_date, start_col, date_col)
+
+    res_fcst = p_fcst.loc[p_fcst[DF_DATE] >= fcst_date]
+    res_fcst_gb=res_fcst[~res_fcst[DF_ANAME].isin(p_actuals[DF_ANAME])].groupby(by=[DF_ANAME, DF_DATE]).sum()
     name = None
     for index_fcst, group_fcst in res_fcst_gb.iterrows():
         if name != index_fcst[0]:
             name = index_fcst[0]
             row += 1
-            c = ws.cell(row, 1, name)
+            ws.cell(row, 1, name)
             set_color(ws.iter_cols(min_row=row, max_row=row, min_col=1), FCST_FILLER)
 
         ws.cell(row, start_col + date_col[index_fcst[1]], group_fcst[DF_HOURS])
@@ -254,11 +263,11 @@ def fcst_act_sheet(ws, fcst, actuals, date_col, rate_rows):
 """
 Returns a weekly date sequence
 """
-def create_date_seq(start, end):
+def create_date_seq(p_start, p_end):
     seq = dict()
     shift = 0
-    for date in pd.date_range(start=start, end=end, freq='W').to_pydatetime():
-        seq[date] = shift
+    for v_date in pd.date_range(start=p_start, end=p_end, freq='W').to_pydatetime():
+        seq[v_date] = shift
         shift += 1
     return seq
 
@@ -266,8 +275,8 @@ def create_date_seq(start, end):
 """
 Set a filller color for a set of cells
 """
-def set_color(iter, fill):
-    for sset in iter:
+def set_color(p_iter, fill):
+    for sset in p_iter:
         for cell in sset:
             cell.fill = fill
 
@@ -289,7 +298,7 @@ def parse_rate(s):
 """
 Add sum formula to all rows with data
 """
-def addFormulas(ws, shift, is_actual, is_faa):
+def add_formulas(ws, shift, is_actual, is_faa):
     start_col = 3 if is_actual else 2
     last_col = ws.cell(1, start_col+shift).column
     hours_formula = "=SUM({0}{1}:{2}{1})"
@@ -366,8 +375,7 @@ def addFormulas(ws, shift, is_actual, is_faa):
 
 
 
-def process(fcst, actuals, rates):
-
+def process(p_fcst, p_actuals, p_rates):
     '''
     Forecast columns are:
     .__________________________________.
@@ -386,19 +394,19 @@ def process(fcst, actuals, rates):
     Data is consolidated by week. Weeks start on Sunday.
     First row with data is 9.
     '''
-    #fcst = pd.read_excel(fcstxl, header=6, converters={4: getSunday})
-    # A new column is created as the concatenation of last and first names
-    fcst[DF_ANAME] = fcst['User Last Name'] + ", " + fcst['User First Name']
-    # When there is no resource assign (ie: last name is NA) the Associate Name column is filled with the Role description
-    fcst[DF_ANAME].fillna(fcst['Role'], inplace=True)
-    # Housekeeping, all unnecessary columns are dropped
-    fcst.drop(FCST2DROP, 1)
-    # Renaming column
-    fcst = fcst.rename(index=str, columns={"Total Booking Hours": DF_HOURS})
 
-    from_date = fcst[DF_DATE].min().date()
-    to_date = fcst[DF_DATE].max().date()
-    max_name_len = fcst[DF_ANAME].map(len).max()
+    # A new column is created as the concatenation of last and first names
+    p_fcst[DF_ANAME] = p_fcst['User Last Name'] + ", " + p_fcst['User First Name']
+    # When there is no resource assign (ie: last name is NA) the Associate Name column is filled with the Role description
+    p_fcst[DF_ANAME].fillna(p_fcst['Role'], inplace=True)
+    # Housekeeping, all unnecessary columns are dropped
+    p_fcst.drop(FCST2DROP, 1)
+    # Renaming column
+    p_fcst = p_fcst.rename(index=str, columns={"Total Booking Hours": DF_HOURS})
+
+    from_date = p_fcst[DF_DATE].min().date()
+    to_date = p_fcst[DF_DATE].max().date()
+    max_name_len = p_fcst[DF_ANAME].map(len).max()
 
     '''
     Actuals columns are:
@@ -437,27 +445,25 @@ def process(fcst, actuals, rates):
     Weeks start on Sunday.
     First row with data is 9. 
     '''
-    #actuals = pd.read_excel(actxl, header=7, converters={'Entry Date': getSunday,
-    #                                                     'Timesheet is Approved': lambda x: 0 if x == 'Y' else -1})
-    actuals.drop(ACTUALS2DROP, 1)
-    actuals = actuals.rename(index=str,
+    p_actuals.drop(ACTUALS2DROP, 1)
+    p_actuals = p_actuals.rename(index=str,
                              columns={"Entry Date": DF_DATE, "Total Hours": DF_HOURS, "Billable Amt. In USD": DF_COST})
-    dt = actuals[DF_DATE].min().date()
+    dt = p_actuals[DF_DATE].min().date()
     if dt < from_date:
         from_date = dt
-    dt = actuals[DF_DATE].max().date()
+    dt = p_actuals[DF_DATE].max().date()
     if dt > to_date:
         to_date = dt
-    tmp_len = actuals[DF_ANAME].map(len).max()
+    tmp_len = p_actuals[DF_ANAME].map(len).max()
     if tmp_len > max_name_len:
         max_name_len = tmp_len
-    actuals[DF_RATE] = actuals[DF_COST] / actuals[DF_HOURS]
+    p_actuals[DF_RATE] = p_actuals[DF_COST] / p_actuals[DF_HOURS]
 
-    wb = xl.Workbook()
+    v_wb = xl.Workbook()
     dcmap = create_date_seq(from_date, to_date)
-    create_headers(wb.active, WSN_ACTUALS, dcmap, True, max_name_len,False)
-    create_headers(wb.create_sheet(), WSN_FCST, dcmap, False, max_name_len,False)
-    create_headers(wb.create_sheet(), WSN_ACTFCST, dcmap, True, max_name_len,True)
+    create_headers(v_wb.active, WSN_ACTUALS, dcmap, True, max_name_len,False)
+    create_headers(v_wb.create_sheet(), WSN_FCST, dcmap, False, max_name_len,False)
+    create_headers(v_wb.create_sheet(), WSN_ACTFCST, dcmap, True, max_name_len,True)
 
     '''
     Rates columns are:
@@ -465,24 +471,25 @@ def process(fcst, actuals, rates):
     |   Column data         |Column index |
     ._____________________________________.
     |Resource               |     0       |
-    |Hard Booked Hours      |     1       |
-    |Forecasted Cost Rate   |     2       |
-    |Forecasted Billing Rate|     3       |
-    |Actual Cost Rate       |     4       |
-    |Actual Billing Rate    |     5       |
+    |Resource Type          |     1
+    |Hard Booked Hours      |     2       |
+    |Forecasted Cost Rate   |     3       |
+    |Forecasted Billing Rate|     4       |
+    |Actual Cost Rate       |     5       |
+    |Actual Billing Rate    |     6       |
     ._____________________________________.
 
     Relevant data to be kept is consultant name (column 0), actual billing rate (columns 5).
     First row with data is 1.
     '''
     r_rows = None
-    if rates is not None:
-        rates = rates.drop(RATES2DROP,1)
-        tmp_len = rates['Resource'].map(len).max()
+    if p_rates is not None:
+        p_rates = p_rates.drop(RATES2DROP,1)
+        tmp_len = p_rates['Resource'].map(len).max()
         if tmp_len > max_name_len:
             max_name_len = tmp_len
         #Rates spreadsheet
-        ratesws = wb.create_sheet()
+        ratesws = v_wb.create_sheet()
         ratesws.title = WSN_RATES
         row = 1
         c = ratesws.cell(row, 1, WS_RATE_RES)
@@ -495,30 +502,30 @@ def process(fcst, actuals, rates):
         ratesws.column_dimensions['A'].width = max_name_len
 
         row += 1
-        for index, data in rates.iterrows():
+        for index, data in p_rates.iterrows():
             ratesws.cell(row, 1,data[WS_RATE_RES])
             ratesws.cell(row, 2, data[WS_RATE_ACT_RATE])
             row +=1
         r_rows = row - 1
 
-    actuals_sheet(wb[WSN_ACTUALS], actuals, dcmap, True)
-    addFormulas(wb[WSN_ACTUALS], max(dcmap.values()), True, False)
+    actuals_sheet(v_wb[WSN_ACTUALS], p_actuals, dcmap, True)
+    add_formulas(v_wb[WSN_ACTUALS], max(dcmap.values()), True, False)
 
-    forecast_sheet(wb[WSN_FCST], fcst, dcmap)
-    addFormulas(wb[WSN_FCST], max(dcmap.values()), False, False)
+    forecast_sheet(v_wb[WSN_FCST], p_fcst, dcmap)
+    add_formulas(v_wb[WSN_FCST], max(dcmap.values()), False, False)
 
-    fcst_act_sheet(wb[WSN_ACTFCST], fcst, actuals, dcmap, r_rows)
-    addFormulas(wb[WSN_ACTFCST], max(dcmap.values()), True, True)
+    fcst_act_sheet(v_wb[WSN_ACTFCST], p_fcst, p_actuals, dcmap, r_rows)
+    add_formulas(v_wb[WSN_ACTFCST], max(dcmap.values()), True, True)
 
-    df_napprv = actuals[actuals[DF_APPRV] < 0]
+    df_napprv = p_actuals[p_actuals[DF_APPRV] < 0]
     if df_napprv.size > 0:
         from_date = df_napprv[DF_DATE].min().date()
         to_date = df_napprv[DF_DATE].max().date()
         dcmap = create_date_seq(from_date, to_date)
-        create_headers(wb.create_sheet(), WSN_NOTAPPRV, dcmap, True, max_name_len,False)
-        actuals_sheet(wb[WSN_NOTAPPRV], df_napprv, dcmap, False)
-        addFormulas(wb[WSN_NOTAPPRV], max(dcmap.values()), True, False)
-    return wb
+        create_headers(v_wb.create_sheet(), WSN_NOTAPPRV, dcmap, True, max_name_len,False)
+        actuals_sheet(v_wb[WSN_NOTAPPRV], df_napprv, dcmap, False)
+        add_formulas(v_wb[WSN_NOTAPPRV], max(dcmap.values()), True, False)
+    return v_wb
 
 if __name__ == '__main__':
     start = time.time()
@@ -549,19 +556,19 @@ if __name__ == '__main__':
         try:
             if fcstxl.endswith('.xls'):
                 book = xlrd.open_workbook(fcstxl)
-                fcst = pd.read_excel(book, engine='xlrd', header=6, converters={4: getSunday})
+                fcst = pd.read_excel(book, engine='xlrd', header=6, converters={4: get_sunday})
             else:
-                fcst = pd.read_excel(fcstxl, header=6, converters={4: getSunday})
+                fcst = pd.read_excel(fcstxl, header=6, converters={4: get_sunday})
         except Exception:
-            print("There's somthing wrong with file format for \n{0}".format(fcstxl))
+            print("There's something wrong with file format for \n{0}".format(fcstxl))
             input('Press ENTER to exit')
             exit(-2)
         try:
             if actxl.endswith('.xls'):
                 book = xlrd.open_workbook(actxl)
-                actuals = pd.read_excel(book, engine='xlrd', header=6, converters={'Entry Date': getSunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
+                actuals = pd.read_excel(book, engine='xlrd', header=6, converters={'Entry Date': get_sunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
             else:
-                actuals = pd.read_excel(actxl,header=7, converters={'Entry Date': getSunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
+                actuals = pd.read_excel(actxl,header=7, converters={'Entry Date': get_sunday,'Timesheet is Approved':lambda x: 0 if x == 'Y' else -1})
         except Exception:
             print("There's somthing wrong with file format for \n{0}".format(actxl))
             input('Press ENTER to exit')
