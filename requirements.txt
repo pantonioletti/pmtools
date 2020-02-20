@@ -1,0 +1,15 @@
+et-xmlfile
+falcon
+gunicorn
+jdcal
+numpy
+openpyxl
+pandas
+pip
+python-dateutil
+pytz
+setuptools
+six
+Werkzeug
+wheel
+xlrd
