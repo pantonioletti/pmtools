@@ -5,6 +5,7 @@ import openpyxl as xl
 import xlrd
 import os
 from openpyxl.styles import PatternFill, Alignment, Font
+import openpyxl.utils as xlu
 import argparse
 
 DF_ANAME = 'Associate Name'
@@ -34,7 +35,8 @@ ACTUALS2DROP= ['Client Reporting Unit', 'Client Name', 'Project Name', 'Client P
                'JTRAX Invoiced Status/Ref #', 'Invoice Through Date', 'Service Delivery Location', 'Entry Note',
                'On Hold for Billing', 'On Hold Reason']
 FCST2DROP = ['Role', 'Project', 'Actual Hours','User Last Name', 'User First Name']
-RATES2DROP = ['Resource Type','Hard Booked Hours','Forecasted Cost Rate','Forecasted Billing Rate','Actual Cost Rate']
+#RATES2DROP = ['Resource Type','Hard Booked Hours','Forecasted Cost Rate','Forecasted Billing Rate','Actual Cost Rate']
+RATES2DROP = ['Hard Booked Hours','Forecasted Cost Rate','Forecasted Billing Rate','Actual Cost Rate']
 
 FORECAST_COLOR="CCFFCC"
 TODAY_COLOR="00B050"
@@ -106,14 +108,14 @@ def create_headers(ws, title, dcmap, is_actual, max_name_len, is_faa):
     r = Alignment(wrap_text=True, horizontal='center')
     c.alignment = r
     c.font = font
-    ws.column_dimensions[c.column].width = 13
+    ws.column_dimensions[c.column_letter].width = 13
     if is_actual:
         curr_col += 1
         c = ws.cell(1, curr_col, WS_TCOST)
         c.fill = DATES_FILLER
         c.alignment = r
         c.font = font
-        ws.column_dimensions[c.column].width = 13
+        ws.column_dimensions[c.column_letter].width = 13
         ws.freeze_panes = 'C2'
     else:
         ws.freeze_panes = 'B2'
@@ -124,25 +126,25 @@ def create_headers(ws, title, dcmap, is_actual, max_name_len, is_faa):
         c.fill = DATES_FILLER
         c.alignment = r
         c.font = font
-        ws.column_dimensions[c.column].width = 13
+        ws.column_dimensions[c.column_letter].width = 13
         curr_col += 1
         c = ws.cell(1, curr_col, WS_R0ALT)
         c.fill = DATES_FILLER
         c.alignment = r
         c.font = font
-        ws.column_dimensions[c.column].width = 13
+        ws.column_dimensions[c.column_letter].width = 13
         curr_col += 1
         c = ws.cell(1, curr_col, WS_TFCSTH)
         c.fill = DATES_FILLER
         c.alignment = r
         c.font = font
-        ws.column_dimensions[c.column].width = 13
+        ws.column_dimensions[c.column_letter].width = 13
         curr_col += 1
         c = ws.cell(1, curr_col, WS_TFCSTC)
         c.fill = DATES_FILLER
         c.alignment = r
         c.font = font
-        ws.column_dimensions[c.column].width = 13
+        ws.column_dimensions[c.column_letter].width = 13
 
 
 """
@@ -195,11 +197,8 @@ def add_forecast(ws, row, name, p_fcst, rate_rows, fcst_date, start_col, date_co
     if name is not None:
         ws.cell(row, 1, name)
         if rate_rows is not None:
-            c = ws.cell(row, 2)
+            c = ws.cell(row, 2, RATE_FORMULA.format(row, rate_rows))
             c.number_format = '#,##0.00'
-            c.set_explicit_value(RATE_FORMULA.format(row, rate_rows), data_type='f')
-            c.value = RATE_FORMULA.format(row, rate_rows)
-            # , data_type = 'f')
         set_color(ws.iter_cols(min_row=row, max_row=row, min_col=1), FCST_FILLER)
         res_fcst = p_fcst.loc[(p_fcst[DF_ANAME] == name) & (p_fcst[DF_DATE] > fcst_date)]
         res_fcst_gb = res_fcst.groupby(by=[DF_ANAME, DF_DATE]).sum()
@@ -311,65 +310,60 @@ def add_formulas(ws, shift, is_actual, is_faa):
             c = ws.cell(r[0].row,start_col -1)
             #Totalizing rate 0 actauals
             if c.fill == ZERO_FILLER or (c.fill == UNAPPRV_FILLER and c.value == 0):
-                c = ws.cell(r[0].row, hours + 2)
+                c = ws.cell(r[0].row, hours + 2, hours_formula.format('C', r[0].row, xlu.cell.get_column_letter(last_col)))
                 c.number_format = '#,##0.00'
-                c.set_explicit_value(hours_formula.format('C',r[0].row,last_col), data_type = 'f')
                 h_col = c.column
-                c = ws.cell(r[0].row,cost + 2)
+                c = ws.cell(r[0].row,cost + 2, cost_formula.format(xlu.cell.get_column_letter(h_col), r[0].row))
                 c.number_format = '#,##0.00'
-                c.set_explicit_value(cost_formula.format(h_col,r[0].row),data_type='f')
             #Totalizing forecast
             elif c.fill == FCST_FILLER:
-                c = ws.cell(r[0].row, hours + 4)
+                c = ws.cell(r[0].row, hours + 4, hours_formula.format('C', r[0].row, xlu.cell.get_column_letter(last_col)))
                 c.number_format = '#,##0.00'
-                c.set_explicit_value(hours_formula.format('C',r[0].row,last_col), data_type = 'f')
                 h_col = c.column
-                c = ws.cell(r[0].row,cost + 4)
+                c = ws.cell(r[0].row,cost + 4, cost_formula.format(xlu.cell.get_column_letter(h_col), r[0].row))
                 c.number_format = '#,##0.00'
-                c.set_explicit_value(cost_formula.format(h_col,r[0].row),data_type='f')
             else:
-                c = ws.cell(r[0].row, hours)
+                c = ws.cell(r[0].row, hours, hours_formula.format('C', r[0].row, xlu.cell.get_column_letter(last_col)))
                 c.number_format = '#,##0.00'
-                c.set_explicit_value(hours_formula.format('C', r[0].row, last_col), data_type='f')
                 if is_actual:
                     h_col = c.column
-                    c = ws.cell(r[0].row,cost)
+                    c = ws.cell(r[0].row,cost, cost_formula.format(xlu.cell.get_column_letter(h_col), r[0].row))
                     c.number_format = '#,##0.00'
-                    c.set_explicit_value(cost_formula.format(h_col,r[0].row),data_type='f')
         else:
-            c = ws.cell(r[0].row, hours)
+            c = ws.cell(r[0].row, hours, hours_formula.format('C', r[0].row, xlu.cell.get_column_letter(last_col)))
             c.number_format = '#,##0.00'
-            c.set_explicit_value(hours_formula.format('C', r[0].row, last_col), data_type='f')
+            if is_actual:
+                c = ws.cell(r[0].row, cost, cost_formula.format(xlu.cell.get_column_letter(hours), r[0].row))
+                c.number_format = '#,##0.00'
 
-    c = ws.cell(ws.max_row+1, hours)
-    c.set_explicit_value(autosum_formula.format(c.column,c.row-1),data_type='f')
+    c = ws.cell(ws.max_row+1, hours, autosum_formula.format(xlu.cell.get_column_letter(hours), ws.max_row)) #c.row-1))
     c.number_format = '#,##0.00'
     font = Font(bold=True)
     c.font = font
     if is_actual:
-        c = ws.cell(ws.max_row, cost)
-        c.set_explicit_value(autosum_formula.format(c.column,c.row-1),data_type='f')
+        #c = ws.cell(ws.max_row, cost, autosum_formula.format(xlu.cell.get_column_letter(c.column), c.row-1))
+        c = ws.cell(ws.max_row, cost, autosum_formula.format(xlu.cell.get_column_letter(cost), ws.max_row - 1))
         c.number_format = '#,##0.00'
         c.font = font
         if is_faa:
             col = cost +1
-            c = ws.cell(ws.max_row,col)
-            c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+            #c = ws.cell(ws.max_row,col, autosum_formula.format(xlu.cell.get_column_letter(c.column), c.row - 1))
+            c = ws.cell(ws.max_row, col, autosum_formula.format(xlu.cell.get_column_letter(col), ws.max_row - 1))
             c.number_format = '#,##0.00'
             c.font = font
             col += 1
-            c = ws.cell(ws.max_row,col)
-            c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+            #c = ws.cell(ws.max_row,col, autosum_formula.format(xlu.cell.get_column_letter(c.column), c.row - 1))
+            c = ws.cell(ws.max_row, col, autosum_formula.format(xlu.cell.get_column_letter(col), ws.max_row - 1))
             c.number_format = '#,##0.00'
             c.font = font
             col += 1
-            c = ws.cell(ws.max_row,col)
-            c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+            #c = ws.cell(ws.max_row,col, autosum_formula.format(xlu.cell.get_column_letter(c.column), c.row - 1))
+            c = ws.cell(ws.max_row, col, autosum_formula.format(xlu.cell.get_column_letter(col), ws.max_row - 1))
             c.number_format = '#,##0.00'
             c.font = font
             col += 1
-            c = ws.cell(ws.max_row,col)
-            c.set_explicit_value(autosum_formula.format(c.column, c.row - 1), data_type='f')
+            #c = ws.cell(ws.max_row,col, autosum_formula.format(xlu.cell.get_column_letter(c.column), c.row - 1))
+            c = ws.cell(ws.max_row, col, autosum_formula.format(xlu.cell.get_column_letter(col), ws.max_row - 1))
             c.number_format = '#,##0.00'
             c.font = font
 
@@ -586,15 +580,15 @@ if __name__ == '__main__':
             print("There's somthing wrong with file format for \n{0}".format(actxl))
             input('Press ENTER to exit')
             exit(-2)
-        try:
-            wb = process(fcst,actuals,rates)
-            wb.save(out)
-            wb.close()
-            print('Done!')
-        except Exception as excp:
-            print(excp)
-            input('Press ENTER to exit')
-            exit(-2)
+        #try:
+        wb = process(fcst,actuals,rates)
+        wb.save(out)
+        wb.close()
+        print('Done!')
+        #except Exception as excp:
+        #    print(excp)
+        #    input('Press ENTER to exit')
+        #    exit(-2)
     else:
         print("Error: files are not in OOXML format .xlsx nor BIFF format .xls")
     print("Executed in {0:.5f} seconds".format((time.time()-start)))
